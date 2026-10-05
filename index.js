@@ -1,10 +1,13 @@
 import express from "express";
 import pino from "pino";
+
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  Browsers
 } from "@whiskeysockets/baileys";
+
 import { Boom } from "@hapi/boom";
 import { GoogleGenAI } from "@google/genai";
 
@@ -17,7 +20,6 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let connected = false;
 let pairingCode = null;
-let pairingRequested = false;
 
 app.get("/", (req, res) => {
   res.send(`
@@ -69,36 +71,33 @@ button {
 </head>
 <body>
 <div class="box">
-
 <h1>🤖 WhatsApp AI Bot</h1>
 
-${connected ? `
-<h2>✅ WhatsApp connecté !</h2>
-<p>Ton bot est prêt.</p>
-` : pairingCode ? `
-<h2>📱 Ton code</h2>
-<div class="code">${pairingCode}</div>
-<p>Sur WhatsApp :</p>
-<p>
-<b>Paramètres → Appareils connectés → Connecter un appareil → Connecter avec un numéro de téléphone</b>
-</p>
-<p>Entre ensuite le code ci-dessus.</p>
-` : `
-<h2>📱 Connecter WhatsApp</h2>
-<p>Entre ton numéro avec le code pays.</p>
-<p>Exemple France : <b>33612345678</b></p>
-
-<form method="POST" action="/pair">
-<input
-  name="phone"
-  type="tel"
-  placeholder="33612345678"
-  required
->
-<br>
-<button type="submit">🔗 Générer le code</button>
-</form>
-`}
+${
+  connected
+    ? `
+      <h2>✅ WhatsApp connecté !</h2>
+      <p>Ton bot est prêt.</p>
+    `
+    : pairingCode
+      ? `
+        <h2>📱 Ton code</h2>
+        <div class="code">${pairingCode}</div>
+        <p>Sur ton téléphone :</p>
+        <p><b>WhatsApp → Réglages → Appareils connectés → Connecter un appareil → Connecter avec un numéro de téléphone</b></p>
+        <p>Entre ensuite le code ci-dessus.</p>
+      `
+      : `
+        <h2>📱 Connecter WhatsApp</h2>
+        <p>Entre ton numéro avec le code pays.</p>
+        <p>Exemple France : <b>33612345678</b></p>
+        <form method="POST" action="/pair">
+          <input name="phone" type="tel" placeholder="33612345678" required>
+          <br>
+          <button type="submit">🔗 Générer le code</button>
+        </form>
+      `
+}
 
 </div>
 </body>
@@ -137,14 +136,16 @@ app.post("/pair", async (req, res) => {
       return res.send("❌ Pour la France, utilise par exemple : 33612345678");
     }
 
+    console.log("📱 Demande de code pour :", phone);
+
     pairingCode = await sock.requestPairingCode(phone);
-    pairingRequested = true;
 
     console.log("📱 CODE WHATSAPP :", pairingCode);
 
     res.redirect("/");
   } catch (error) {
-    console.error("Erreur pairing :", error);
+    console.error("❌ Erreur pairing :", error);
+    pairingCode = null;
     res.send("❌ Impossible de générer le code. Actualise puis réessaie.");
   }
 });
@@ -179,8 +180,7 @@ ${text}
 }
 
 async function startBot() {
-  const { state, saveCreds } =
-    await useMultiFileAuthState("./auth");
+  const { state, saveCreds } = await useMultiFileAuthState("./auth");
 
   let version;
 
@@ -195,16 +195,12 @@ async function startBot() {
     version,
     logger: pino({ level: "silent" }),
     markOnlineOnConnect: false,
-    browser: ["WhatsApp AI Bot", "Chrome", "1.0.0"]
+    browser: Browsers.macOS("Chrome")
   });
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-
-    if (qr && !state.creds.registered && !pairingRequested) {
-      console.log("📱 En attente du numéro pour le code de connexion.");
-    }
+  sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
 
     if (connection === "open") {
       connected = true;
@@ -249,10 +245,12 @@ async function startBot() {
         if (text.trim().toLowerCase() === "/help") {
           await sock.sendMessage(jid, {
             text:
-              "🤖 Commandes :\n" +
-              "/help - aide\n" +
-              "/reset - recommencer\n\n" +
-              "Sinon écris-moi simplement ton message 😊"
+`🤖 Commandes :
+
+/help - aide
+/reset - recommencer
+
+Sinon écris-moi simplement ton message 😊`
           });
           continue;
         }
@@ -273,7 +271,8 @@ async function startBot() {
         });
 
       } catch (error) {
-        console.error("Erreur message :", error);
+
+        console.error("❌ Erreur message :", error);
 
         await sock.sendMessage(jid, {
           text: "❌ Une erreur est survenue. Réessaie."
@@ -284,6 +283,6 @@ async function startBot() {
 }
 
 startBot().catch(error => {
-  console.error("Erreur fatale :", error);
+  console.error("❌ Erreur fatale :", error);
   process.exit(1);
 });
