@@ -8,6 +8,7 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import { GoogleGenAI } from "@google/genai";
 import fs from "node:fs";
+import qrcode from "qrcode-terminal";
 
 const PORT = process.env.PORT || 10000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -68,8 +69,8 @@ async function startBot() {
     if (qr) {
       console.log("\n📱 QR CODE DISPONIBLE");
       console.log("Ouvre WhatsApp > Appareils connectés > Connecter un appareil.");
-      console.log("Le QR est affiché dans les logs du service.\n");
-      console.log(qr);
+      console.log("Le QR est affiché ci-dessous :\n");
+      qrcode.generate(qr, { small: true });
     }
 
     if (connection === "open") {
