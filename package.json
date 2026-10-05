@@ -3,13 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
-  "scripts": { "start": "node index.js" },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "@google/genai": "^2.24.0",
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "6.7.24",
     "express": "^5.1.0",
-    "pino": "^9.9.0"
+    "pino": "^9.9.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }
