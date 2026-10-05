@@ -7,131 +7,146 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { GoogleGenAI } from "@google/genai";
-import QRCode from "qrcode";
 
 const PORT = process.env.PORT || 10000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const app = express();
+app.use(express.urlencoded({ extended: true }));
 
+let sock = null;
 let connected = false;
-let currentQR = null;
-let sock;
+let pairingCode = null;
+let pairingRequested = false;
 
-app.get("/", (_req, res) => {
-  if (connected) {
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>WhatsApp AI Bot</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 40px;
-            background: #f5f5f5;
-          }
-          .box {
-            background: white;
-            padding: 30px;
-            border-radius: 20px;
-            max-width: 500px;
-            margin: auto;
-          }
-          .ok {
-            color: #16a34a;
-            font-size: 22px;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <h1>🤖 WhatsApp AI Bot</h1>
-          <p class="ok">✅ WhatsApp est connecté !</p>
-          <p>Ton bot est prêt à recevoir des messages.</p>
-        </div>
-      </body>
-      </html>
-    `);
-    return;
-  }
-
-  if (currentQR) {
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Connecter WhatsApp</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 20px;
-            background: #f5f5f5;
-          }
-          .box {
-            background: white;
-            padding: 25px;
-            border-radius: 20px;
-            max-width: 500px;
-            margin: auto;
-          }
-          img {
-            width: 100%;
-            max-width: 400px;
-            image-rendering: pixelated;
-          }
-          .refresh {
-            margin-top: 15px;
-            color: #666;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <h1>📱 Connecter WhatsApp</h1>
-          <p>Sur ton téléphone :</p>
-          <p>
-            <b>WhatsApp → Paramètres → Appareils connectés → Connecter un appareil</b>
-          </p>
-
-          <img src="${currentQR}" alt="QR Code WhatsApp">
-
-          <p class="refresh">
-            Si le QR ne fonctionne plus, actualise cette page.
-          </p>
-        </div>
-      </body>
-      </html>
-    `);
-    return;
-  }
-
+app.get("/", (req, res) => {
   res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta http-equiv="refresh" content="3">
-      <title>WhatsApp AI Bot</title>
-    </head>
-    <body style="font-family:Arial;text-align:center;padding:40px">
-      <h1>🤖 WhatsApp AI Bot</h1>
-      <p>⏳ Génération du QR code...</p>
-      <p>Actualise dans quelques secondes.</p>
-    </body>
-    </html>
-  `);
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WhatsApp AI Bot</title>
+<style>
+body {
+  font-family: Arial;
+  background: #f3f4f6;
+  text-align: center;
+  padding: 40px 15px;
+}
+.box {
+  background: white;
+  max-width: 450px;
+  margin: auto;
+  padding: 30px;
+  border-radius: 20px;
+  box-shadow: 0 5px 20px #ddd;
+}
+input {
+  width: 90%;
+  padding: 15px;
+  font-size: 18px;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  margin: 15px 0;
+}
+button {
+  width: 95%;
+  padding: 15px;
+  background: #25D366;
+  color: white;
+  border: 0;
+  border-radius: 10px;
+  font-size: 18px;
+  font-weight: bold;
+}
+.code {
+  font-size: 32px;
+  font-weight: bold;
+  letter-spacing: 5px;
+  margin: 25px 0;
+}
+</style>
+</head>
+<body>
+<div class="box">
+
+<h1>🤖 WhatsApp AI Bot</h1>
+
+${connected ? `
+<h2>✅ WhatsApp connecté !</h2>
+<p>Ton bot est prêt.</p>
+` : pairingCode ? `
+<h2>📱 Ton code</h2>
+<div class="code">${pairingCode}</div>
+<p>Sur WhatsApp :</p>
+<p>
+<b>Paramètres → Appareils connectés → Connecter un appareil → Connecter avec un numéro de téléphone</b>
+</p>
+<p>Entre ensuite le code ci-dessus.</p>
+` : `
+<h2>📱 Connecter WhatsApp</h2>
+<p>Entre ton numéro avec le code pays.</p>
+<p>Exemple France : <b>33612345678</b></p>
+
+<form method="POST" action="/pair">
+<input
+  name="phone"
+  type="tel"
+  placeholder="33612345678"
+  required
+>
+<br>
+<button type="submit">🔗 Générer le code</button>
+</form>
+`}
+
+</div>
+</body>
+</html>
+`);
 });
 
-app.get("/health", (_req, res) => {
+app.get("/health", (req, res) => {
   res.json({
     ok: true,
     whatsapp: connected
   });
+});
+
+app.post("/pair", async (req, res) => {
+  try {
+    if (!sock) {
+      return res.send("⏳ WhatsApp est encore en démarrage. Actualise dans quelques secondes.");
+    }
+
+    if (connected) {
+      return res.send("✅ WhatsApp est déjà connecté.");
+    }
+
+    let phone = String(req.body.phone || "").replace(/\D/g, "");
+
+    if (!phone) {
+      return res.send("❌ Numéro invalide.");
+    }
+
+    if (phone.startsWith("0")) {
+      phone = "33" + phone.substring(1);
+    }
+
+    if (!phone.startsWith("33")) {
+      return res.send("❌ Pour la France, utilise par exemple : 33612345678");
+    }
+
+    pairingCode = await sock.requestPairingCode(phone);
+    pairingRequested = true;
+
+    console.log("📱 CODE WHATSAPP :", pairingCode);
+
+    res.redirect("/");
+  } catch (error) {
+    console.error("Erreur pairing :", error);
+    res.send("❌ Impossible de générer le code. Actualise puis réessaie.");
+  }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -139,7 +154,7 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 if (!GEMINI_API_KEY) {
-  console.error("❌ GEMINI_API_KEY is missing.");
+  console.error("❌ GEMINI_API_KEY manquante.");
   process.exit(1);
 }
 
@@ -147,18 +162,17 @@ const ai = new GoogleGenAI({
   apiKey: GEMINI_API_KEY
 });
 
-const SYSTEM = `
-Tu es un assistant WhatsApp sympathique et naturel.
-Réponds en français sauf si la personne écrit dans une autre langue.
-Sois concis et facile à comprendre.
-Ne prétends pas être humain.
-Ne donne pas de spam, de harcèlement ou de contenu dangereux.
-`;
-
 async function askAI(text) {
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
-    contents: `${SYSTEM}\n\nMessage reçu : ${text}`
+    contents: `
+Tu es un assistant WhatsApp sympathique.
+Réponds en français sauf si la personne parle une autre langue.
+Réponds naturellement et simplement.
+
+Message :
+${text}
+`
   });
 
   return response.text?.trim() || "Je n'ai pas réussi à répondre.";
@@ -186,99 +200,71 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on(
-    "connection.update",
-    async ({ connection, lastDisconnect, qr }) => {
+  sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
 
-      if (qr) {
-        console.log("📱 Nouveau QR WhatsApp disponible.");
+    if (qr && !state.creds.registered && !pairingRequested) {
+      console.log("📱 En attente du numéro pour le code de connexion.");
+    }
 
-        try {
-          currentQR = await QRCode.toDataURL(qr);
-          console.log("✅ QR code disponible sur la page web.");
-        } catch (err) {
-          console.error("Erreur génération QR:", err);
-        }
-      }
+    if (connection === "open") {
+      connected = true;
+      pairingCode = null;
+      console.log("✅ WHATSAPP CONNECTÉ !");
+    }
 
-      if (connection === "open") {
-        connected = true;
-        currentQR = null;
-        console.log("✅ WhatsApp connecté !");
-      }
+    if (connection === "close") {
+      connected = false;
 
-      if (connection === "close") {
-        connected = false;
+      const code =
+        new Boom(lastDisconnect?.error)?.output?.statusCode;
 
-        const code =
-          new Boom(lastDisconnect?.error)?.output?.statusCode;
-
-        if (code !== DisconnectReason.loggedOut) {
-          console.log("🔄 Connexion perdue, reconnexion...");
-
-          setTimeout(() => {
-            startBot();
-          }, 3000);
-        } else {
-          console.log(
-            "❌ Session WhatsApp déconnectée."
-          );
-        }
+      if (code !== DisconnectReason.loggedOut) {
+        console.log("🔄 Reconnexion...");
+        setTimeout(startBot, 3000);
+      } else {
+        console.log("❌ WhatsApp déconnecté.");
       }
     }
-  );
+  });
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
 
     for (const msg of messages) {
 
-      if (!msg.message || msg.key.fromMe) {
-        continue;
-      }
+      if (!msg.message || msg.key.fromMe) continue;
 
       const jid = msg.key.remoteJid;
 
-      if (!jid || jid === "status@broadcast") {
-        continue;
-      }
+      if (!jid || jid === "status@broadcast") continue;
 
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
         "";
 
-      if (!text.trim()) {
-        continue;
-      }
+      if (!text.trim()) continue;
 
       try {
 
         if (text.trim().toLowerCase() === "/help") {
-
           await sock.sendMessage(jid, {
             text:
               "🤖 Commandes :\n" +
-              "/help — afficher l'aide\n" +
-              "/reset — recommencer la conversation\n\n" +
-              "Sinon, écris-moi simplement ce que tu veux 😊"
+              "/help - aide\n" +
+              "/reset - recommencer\n\n" +
+              "Sinon écris-moi simplement ton message 😊"
           });
-
           continue;
         }
 
         if (text.trim().toLowerCase() === "/reset") {
-
           await sock.sendMessage(jid, {
-            text: "✅ C'est fait. On repart de zéro !"
+            text: "✅ Conversation réinitialisée !"
           });
-
           continue;
         }
 
-        await sock.sendPresenceUpdate(
-          "composing",
-          jid
-        );
+        await sock.sendPresenceUpdate("composing", jid);
 
         const answer = await askAI(text);
 
@@ -286,21 +272,18 @@ async function startBot() {
           text: answer
         });
 
-      } catch (err) {
-
-        console.error("Erreur message:", err);
+      } catch (error) {
+        console.error("Erreur message :", error);
 
         await sock.sendMessage(jid, {
-          text:
-            "❌ Désolé, j'ai eu un problème avec l'IA. Réessaie dans un instant."
+          text: "❌ Une erreur est survenue. Réessaie."
         }).catch(() => {});
-
       }
     }
   });
 }
 
-startBot().catch(err => {
-  console.error("Erreur fatale:", err);
+startBot().catch(error => {
+  console.error("Erreur fatale :", error);
   process.exit(1);
 });
